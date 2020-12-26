@@ -1,0 +1,459 @@
+---
+title: "Newyork_Taxi_EDA"
+author: "Roysen"
+date: "12/14/2020"
+output: html_document
+---
+
+```{r,setup}
+knitr::opts_chunk$set(echo = FALSE)
+```
+
+
+# 探索性数据分析-纽约出租车
+
+## 背景
+
+    此数据集是关于2家纽约出租车公司采集的用户出行数据，数据描述了纽约的路况以及用户的出行习惯，通过对数据的分析和挖掘，可以展现现纽约出行市场的概况。
+    
+    1.出行场景中是单人用车多，还是多人用车多。
+
+    2.出行业务中出行距离、时长和速度概况。
+
+    3.上下车时间和地点的分布概况。
+
+    4.两家出租车公司业务量级和运营模式有没有差异。
+
+    5.出行行为在星期、日和时刻因素下的是否分别具有差异。
+
+
+
+## 目录：
+
+    一、加载包并读取数据
+        1.1加载包
+        1.2读取数据
+        1.3变量注释
+        1.4检查缺失值
+        1.5按行随机抽样10000人
+    二、数据清洗
+        2.12.1提取经纬度变量，计算行驶距离（km），创建速度变量，单位（km/h），将日期单位改为小时
+        2.2日期格式转换，将vendor_id转换因子
+        2.3排序并查找异常值 
+        2.4剔除异常值
+    三、总体变量统计以及可视化
+        3.1 总体乘客人数分布状况 
+        3.2 总体出行时长分布
+        3.3 总体出行距离分布
+        3.4 总体出行速度状况
+        3.5 上下车时间分布情况
+        3.6 行程记录分享状况
+        3.7对出租车公司进行分组，查看出行距离、出行速度、出行时间是否有差异
+        3.8出行地理位置可视化
+    四、按照月份、星期、时刻细化统计 
+        4.1 1-31日累计出行人数
+        4.2 6个月中周六至周日出行人数分布
+        4.3 6个月中0:00-24:00的平均出行时长、出行距离、出行速度
+        4.4 6个月中1-31日，各天的平均出行时长、出行距离、出行速度
+        4.5 每月0：00-24:00出行人数在月份中的表现情况
+    五、相关性分析  
+    六、结论
+
+## 一、加载包并读取数据
+
+### 1.1加载包
+
+```{r, message=FALSE}
+library(tidyverse)
+library(psych)
+library(viridis)
+library(lubridate)
+library(geosphere)
+library(patchwork)
+```
+
+### 1.2读取数据
+
+```{r }
+train <- read_csv("~/workspace/train.csv")
+summary(train)
+```
+
+### 1.3变量注释
+
+|序号 | 变量 | 注释 |
+|:---- |:---- |:----|
+| 01|   id                |    ID       |
+| 02|   vendor_id         | 出租车公司id|
+| 03|   pickup_datetime   | 上车时间    |
+| 04|   dropoff_datetime  | 下车时间    |
+| 05|   passenger_count   | 乘客人数    |
+| 06|   pickup_longitude  | 上车经度    |
+| 07|   pickup_latitude   | 上车纬度    |
+| 08|   dropoff_longitude | 下车经度    |
+| 09|   dropoff_latitude  | 下车维度    |
+| 10|   store_and_fwd_flag| 是否分享行程记录 Y=是，N= 不|
+| 11|   trip_duration     | 旅行时间（秒)|
+
+
+    数据共有观测145万多行，变量11个,是一个非常大的数据集，抽取一个10000行的样本进行分析。
+
+    从11个变量的数据纬度来看，主要是关于纽约出租车用户出行时间、出行时长、上下车地点、出行人数，是否分享行程记录的数据。
+
+
+
+### 1.4检查缺失值
+
+```{r}
+train %>% 
+  summarise(
+    across(everything(), ~sum(is.na(.)))
+  )
+```
+
+    各变量均没有缺失值
+
+### 1.5按行随机抽样10000人
+
+```{r}
+set.seed(1110)
+test <- sample_n(train, 10000)
+```
+
+## 数据清洗
+
+### 2.1提取经纬度变量，计算行驶距离（km），创建速度变量，单位（km/h），将日期单位改为小时
+
+```{r }
+pickup_location <- test %>% #上车坐标
+    select(pickup_longitude,pickup_latitude)
+
+dropoff_location <- test %>% #下车坐标
+    select(dropoff_longitude,dropoff_latitude)
+
+test <- test %>% #计算行驶距离（km）
+    mutate(distance = distHaversine(pickup_location,dropoff_location)/1000,
+           speed = distance/trip_duration*3600,
+           trip_duration = trip_duration/3600)
+```
+
+### 2.2日期格式转换，将vendor_id转换因子
+
+```{r}
+test <- test %>% 
+    mutate(store_and_fwd_flag = factor(store_and_fwd_flag),
+           pickup_datetime = ymd_hms(pickup_datetime),
+           dropoff_datetime = ymd_hms(dropoff_datetime),
+           vendor_id = factor(vendor_id)
+           ) 
+  
+test
+```
+
+### 2.3排序并查找异常值 
+
+```{r}
+test %>% 
+  select(distance, speed, trip_duration) %>% 
+  arrange(-speed,distance, trip_duration)
+test %>% 
+  select(distance, speed, trip_duration) %>% 
+  arrange(-trip_duration, speed, distance)
+
+```
+
+    速度大于280km/h几乎不可能，行驶时长超过23h可能性也不大。因而删除掉这部分数据。
+
+### 2.4剔除异常值
+
+```{r}
+test1 <- test %>% 
+  filter(trip_duration < 23 & speed < 280)
+```
+
+
+## 三、总体变量统计以及可视化
+
+### 3.1总体乘客人数分布状况 
+
+```{r}
+test1 %>% 
+  group_by(passenger_count) %>%
+  count()
+
+p1 <- test1 %>% 
+  group_by(passenger_count) %>%
+  count() %>%
+ggplot(aes(passenger_count, n, fill = factor(passenger_count))) +
+  geom_col() +
+  theme(legend.position = "none")
+
+p2 <- test1 %>% 
+  ggplot(aes(passenger_count, fill = vendor_id)) +
+    geom_bar(position = "dodge")
+        
+p1+p2
+
+```
+
+    单人出行人数人数7133人，占比71.4%。2个乘客的出行人数约1356人，占比13.6%。单人出行场景是纽约出行业务的重点。
+
+    两家公司业务量级趋同，区别在于，出租车公司2做多人出行业务。
+
+### 3.2总体出行时长分布
+
+```{r}
+test1 %>% 
+ggplot(aes(trip_duration)) +
+  geom_histogram(bins = 100,fill = I("#6666ff")) +
+  labs(x = "trip_duration")
+```
+
+    平均出行时间0.2小时，出行时长超过1小时的人数非常之少。基本都在30分钟以内。
+ 
+### 3.3总体出行距离分布
+ 
+```{r}
+test1 %>% 
+ggplot(aes(distance))+
+  geom_histogram(bins = 100, fill = I("#6666ff"))+
+  labs(title = "histogram of distance")
+```
+ 
+    平均行使距离为3.42km，出行距离超过10km的人数较少。短途出行代表了纽约出行市场的主要需求。
+ 
+### 3.4总体出行速度状况
+ 
+```{r}
+test1 %>% 
+ggplot(aes(speed))+
+  geom_histogram(bins = 100, fill = I("#6666ff"))+
+  labs(title = "histogram of distance")
+```
+ 
+   速度集中在15km/h，超过25km/h出行情况不多。
+   
+### 3.5上下车时间分布情况
+ 
+```{r}
+p1 <- test1 %>% 
+  ggplot(aes(pickup_datetime, color = I("#6666ff")))+
+    geom_freqpoly(binwidth = 86400) #86400秒 = 1天
+p2 <- test1 %>% 
+  ggplot(aes(dropoff_datetime, color = I("#6666ff")))+
+    geom_freqpoly(binwidth = 86400)
+
+p1/p2
+```
+ 
+    6个月中上、下车时间频率分布的波动趋同，问题是1月底-2月初，打车人数锐减。
+    
+### 3.6行程记录分享状况
+ 
+```{r}
+test1 %>% 
+  filter(store_and_fwd_flag == "Y") %>% 
+  count() 
+
+test1 %>% 
+  ggplot(aes(passenger_count, fill = store_and_fwd_flag))+
+    geom_bar(position = "dodge")+
+    labs(title = "store_and_fwd_flag")
+```
+
+    分享行程的人数只有42人，占比0.4%。5人和6人乘客没有分享行程的情况。
+ 
+### 3.7对出租车公司进行分组，查看出行距离、出行速度、出行时间是否有差异
+
+```{r}
+p1 <- test1 %>% 
+ggplot(aes(distance, color = vendor_id))+
+    geom_density()+
+    labs(title = "density of distance on vendor_id")
+    
+p2 <- test1 %>% 
+ggplot(aes(speed, color = vendor_id))+
+    geom_density()+
+    labs(title = "density of speed on vendor_id")
+
+p3 <- test1 %>% 
+ggplot(aes(trip_duration, color = vendor_id))+
+    geom_density() +
+    labs(title = "density of trip_duration on vendor_id")
+
+p1/p2/p3
+```
+
+    重叠非常严重，可以看出两家出租车公司在出行距离、速度和旅行时长方面差异不大，短途用车和拥堵问题是一个共性的情况。
+
+### 3.8出行地理位置可视化
+
+```{r}
+tpick <- test1 %>%
+  select(longitude = pickup_longitude, latitude = pickup_latitude)
+
+tdrop <- test1 %>%
+  select(longitude = dropoff_longitude, latitude = dropoff_latitude)
+
+full_join(tpick, tdrop,  by = c("longitude", "latitude")) %>% 
+ggplot(aes(longitude,latitude,))+
+  geom_point(color = "#6666ff" )
+```
+
+    出行位置最集中的区域是西经74-西经73.9，北纬40.65-北纬40.85。出行方向表现为东北-西南走向为主，南北跨度高于东西跨度。
+
+## 四、按照月份、星期、时刻细化统计 
+ 
+### 4.1 1-31日累计出行人数
+ 
+```{r}
+test1 %>% 
+  mutate(mday = mday(pickup_datetime)) %>% 
+  count(mday) %>% 
+  ggplot(aes(mday, n, fill = I("#6666ff")))+
+    geom_col(width = 0.7)
+```
+
+     该图显示：6个月的出行数据中，31号这一天用车人数最少，只有150人，减少了50%, 一个原因是并非每月都有31号。
+     
+     23日和30日出行人数相对其他日少了50人/每日。
+    
+### 4.2 6个月中周六至周日出行人数分布
+
+```{r}
+test1 %>% 
+  mutate(wday = wday(pickup_datetime, label = TRUE)) %>% 
+  count(wday) %>% 
+  ggplot(aes(wday, n, fill = I("#6666ff")))+
+    geom_col(width = 0.7)+
+    coord_flip()
+```
+    
+    图形表明，6个月中周五和周六出行人数最多，超过了1500人，周日和周一出行人数约为1250人，其他接近1500人。
+
+### 4.3 6个月中0:00-24:00的平均出行时长、出行距离、出行速度
+
+```{r, message=FALSE}
+
+p1 <- test1 %>% 
+  mutate(hour = hour(pickup_datetime)) %>% 
+  group_by(hour) %>% 
+  summarise(avg_distance =mean(distance),
+            n = n()) %>% 
+  ggplot(aes(hour, avg_distance, color = I("#6666ff")))+
+    geom_line()
+
+p2 <- test1 %>% 
+  mutate(hour = hour(pickup_datetime)) %>% 
+  group_by(hour) %>% 
+  summarise(avg_trip =mean(trip_duration),
+            n = n()) %>% 
+  ggplot(aes(hour, avg_trip, color = I("#6666ff")))+
+    geom_line()
+
+p3 <- test1 %>% 
+  mutate(hour = hour(pickup_datetime)) %>% 
+  group_by(hour) %>% 
+  summarise(avg_speed =mean(speed),
+            n = n()) %>% 
+  ggplot(aes(hour, avg_speed, color = I("#6666ff")))+
+    geom_line()
+
+p1/p2/p3
+```
+
+    0:00-5:00，是平均出行距离最长的时间段，约为（4-5km）。7:30-10:00，平均行驶距离不足3km。
+    
+    0:00-5:00，平均出行时长不超过0.2小时。7:30-17:30，平均出行时长0.25小时，是一日中，出行时长最长的时间段。
+    
+    0:00-5:00，平均出行速度由17km/h增加到23km/h，是一天中速度最快的时刻。7:30-20:00，平均出行速度只有13km/h左右，这个时间段是一天中最拥堵的时间。
+    
+    
+
+###  4.4 6个月中1-31日，各天的平均出行时长、出行距离、出行速度
+
+```{r, message = FALSE}
+p1 <- test1 %>% 
+  mutate(day = day(pickup_datetime)) %>% 
+  group_by(day) %>% 
+  summarise(avg_trip =mean(trip_duration),
+            n = n()) %>% 
+  ggplot(aes(day, avg_trip, color = I("#6666ff")))+
+    geom_line()
+
+p2 <- test1 %>% 
+  mutate(day = day(pickup_datetime)) %>% 
+  group_by(day) %>% 
+  summarise(avg_distance =mean(distance),
+            n = n()) %>% 
+  ggplot(aes(day, avg_distance, color = I("#6666ff")))+
+    geom_line()
+
+p3 <-  test1 %>% 
+  mutate(day = day(pickup_datetime)) %>% 
+  group_by(day) %>% 
+  summarise(avg_speed =mean(speed),
+            n = n()) %>% 
+  ggplot(aes(day, avg_speed, color = I("#6666ff")))+
+    geom_line()
+
+p1/p2/p3
+```
+
+    累计每天平均出行时长、距离和速度，波动范围不大。
+    
+    每个月的11号前后是出行距离、速度和时长数相对是最小的一天。
+
+### 4.5 每月0:00-24:00出行人数在月份中的表现情况
+
+```{r}
+test1 %>%
+  mutate(hpick = hour(pickup_datetime),
+         Month = factor(month(pickup_datetime, label = TRUE))) %>% 
+group_by(hpick, Month) %>%
+  count() %>% 
+  ggplot(aes(hpick, n, color = Month)) +
+  geom_line(size = 1.5) +
+  labs(x = "Hour of one day", y = "count")
+```
+
+    0:00-7:30,每个月出行人数均小于50人，属于打车低频时间段。其余时间段，每个月出行人数都在90人左右浮动。
+
+
+## 五、相关性分析    
+
+```{r}
+test1 %>% 
+  select(c(-id, -pickup_datetime, -dropoff_datetime, -store_and_fwd_flag,)) %>%  
+  pairs.panels(stars = TRUE, main="Newyork taxi Scatterplot Matrix")
+```
+
+
+    行驶距离和上车经度表现为正相关系，相关系数为0.51。上下车维度呈现一定的正相关关系，相关系数为o.43出行距离与出行度表现为正相关，相关系数为0.56。
+
+
+
+## 六、结论
+
+    1.纽约单人出行人数人数7133人，占比71.4%，单人出行场景是纽约出行业务的重点。多人出行市场主要是出租车公司2在做，目前规模不算大。多人时长用户需求暂时处于平稳状态。
+
+    2.纽约的出行市场以短途（5km以内）为主，出现时间集中在0.5小时以内，平均速度15km/h。
+
+    3.1月底-2月初，打车人数锐减，谷歌显示因为遭遇了暴风雪天气。
+
+    4.分享行程的人数只有42人，占比0.4%。5人和6人乘客没有分享行程的情况。
+
+    5.出行位置，南北跨度高于东西跨度。出行方向表现为东北-西南走向为主
+
+    6. 6个月的出行数据中，31号这一天用车人数最少，只有150人，减少了50%,23日和30日出行人数相对其他日少了50人/每日。
+     
+    7. 0:00-5:00，为出行低频时段，人数少，速度快。7:30-10:00，是出行高频时段，平均行驶距离不足3km，平均出行时长0.25小时，是最为拥堵的时刻。
+    
+    8.累计每天平均出行时长、距离和速度，波动范围不大，每月的11日是出行距离、速度和时长数相对是最小的一天。
+    
+    
+
+
+
+
+
